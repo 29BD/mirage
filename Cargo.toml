@@ -7,4 +7,5 @@ edition = "2024"
 anyhow = "1.0.104"
 google-ai-rs = { version = "0.3.0", features = [ "serde" ] }
 serde = { version = "1.0.229", features = [ "derive" ] }
+thiserror = "2.0.21"
 tracing = "0.1.44"

@@ -1,4 +1,6 @@
-use google_ai_rs::{AsSchema, AsSchemaWithSerde};
+use std::{error::Error, path::Path};
+use super::errors::{QuizError, QuizValidationError};
+use google_ai_rs::{content::TryIntoContents, AsSchema, Client, Content, Part};
 use serde::Deserialize;
 
 /// A single question in a quiz
@@ -37,4 +39,54 @@ pub struct QuizSection {
 }
 
 /// An entire quiz.
-pub struct Quiz(Vec<QuizSection>);
+#[derive(Debug)]
+pub struct Quiz(pub Vec<QuizSection>);
+
+/// What the model returns.
+#[derive(AsSchema, Deserialize, Debug)]
+struct QuizResponse {
+    #[schema(description = "Sections of the quiz, in the order they appear in the source")]
+    pub sections: Vec<QuizSection>,
+}
+
+
+impl TryFrom<QuizResponse> for Quiz {
+    type Error = QuizValidationError;
+ 
+    fn try_from(r: QuizResponse) -> Result<Self, Self::Error> {
+        if r.sections.is_empty() {
+            return Err(QuizValidationError::NoSections);
+        }
+        for (section, s) in r.sections.iter().enumerate() {
+            if s.questions.is_empty() {
+                return Err(QuizValidationError::EmptySection { section });
+            }
+            for (question, q) in s.questions.iter().enumerate() {
+                match q {
+                    QuizQuestion::MultipleChoice {
+                        question: text,
+                        options,
+                    } => {
+                        if text.trim().is_empty() {
+                            return Err(QuizValidationError::EmptyQuestion { section, question });
+                        }
+                        if options.len() < 2 {
+                            return Err(QuizValidationError::TooFewOptions {
+                                section,
+                                question,
+                                got: options.len(),
+                            });
+                        }
+                    }
+                    QuizQuestion::TrueFalse { question: text }
+                    | QuizQuestion::OtherQuestion { question: text } => {
+                        if text.trim().is_empty() {
+                            return Err(QuizValidationError::EmptyQuestion { section, question });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Quiz(r.sections))
+    }
+}
