@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.104"
+google-ai-rs = { version = "0.3.0", features = [ "serde" ] }
+serde = { version = "1.0.229", features = [ "derive" ] }
+tracing = "0.1.44"
