@@ -2,6 +2,7 @@ use std::path::Path;
 use google_ai_rs::Part;
 use super::errors::QuizError;
 
+#[allow(dead_code)]
 fn mime_for(path: &Path) -> Result<&'static str, QuizError> {
     let ext = path
         .extension()
@@ -18,6 +19,7 @@ fn mime_for(path: &Path) -> Result<&'static str, QuizError> {
 }
 
 /// Reads an image file into a `Part` ready to send to the model.
+#[allow(dead_code)]
 pub fn load_image_part(path: &Path) -> Result<Part, QuizError> {
     let mime = mime_for(path)?;
     let bytes = std::fs::read(path).map_err(|source| QuizError::ReadImage {

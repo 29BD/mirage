@@ -4,6 +4,7 @@ pub mod errors;
 mod image;
 use google_ai_rs::{Client, GenerativeModel};
 
+#[allow(dead_code)]
 pub(crate) async fn llm(
     client: &Client,
     model: &str,

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum QuizValidationError {
     #[error("Model returned no sections")]
     NoSections,
@@ -21,6 +22,7 @@ pub enum QuizValidationError {
 }
  
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum QuizError {
     #[error("Unsupported image extension: {0:?}")]
     UnsupportedImage(Option<String>),
@@ -37,6 +39,7 @@ pub enum QuizError {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)]
 pub enum QuizFromImageError {
     #[error(transparent)]
     Response(#[from] QuizError),

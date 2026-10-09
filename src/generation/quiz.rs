@@ -7,6 +7,7 @@ use google_ai_rs::{AsSchema, Client};
 use serde::Deserialize;
 
 /// A single question in a quiz
+#[allow(dead_code)]
 #[derive(AsSchema, Deserialize, Debug)]
 pub enum QuizQuestion {
     #[schema(description = "A question with pre-defined answers that you have to choose from")]
@@ -33,6 +34,7 @@ pub enum QuizQuestion {
 /// A section breaks up long quizzes into different parts. Typically, each 
 /// section holds questions of the same variant. Short quizzes may hold only
 /// one section that spans the entire scope of the quiz.
+#[allow(dead_code)]
 #[derive(AsSchema, Deserialize, Debug)]
 pub struct QuizSection {
     #[schema(description = "Short instructions shown above this section, e.g. how to answer")]
@@ -42,26 +44,30 @@ pub struct QuizSection {
 }
 
 /// An entire quiz.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Quiz(pub Vec<QuizSection>);
 
 /// What the model returns.
+#[allow(dead_code)]
 #[derive(AsSchema, Deserialize, Debug)]
 struct QuizResponse {
     #[schema(description = "Sections of the quiz, in the order they appear in the source")]
     pub sections: Vec<QuizSection>,
 }
 
+#[allow(dead_code)]
 impl QuizResponse {
     pub async fn from_image(client: &Client, model_name: &str, image_path: impl AsRef<Path>) -> Result<Self, QuizError> {
         let image = load_image_part(image_path.as_ref())?;
 
         let model = client.typed_model::<QuizResponse>(model_name);
-        let response = model.generate_content((super::prompts::quiz_image_to_encoded, image)).await?;
+        let response = model.generate_content((super::prompts::QUIZ_IMAGE_TO_ENCODED, image)).await?;
         Ok(response)
     }
 }
 
+#[allow(dead_code)]
 impl Quiz {
     pub async fn from_image(client: &Client, model_name: &str, image_path: impl AsRef<Path>) -> Result<Self, QuizFromImageError> {
         let quiz_response = QuizResponse::from_image(client, model_name, image_path).await?;
