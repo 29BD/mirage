@@ -22,6 +22,14 @@ struct Args {
     /// Only transcribe the quiz; skip generating answers.
     #[arg(long)]
     no_answers: bool,
+
+    /// Max LLM requests per minute while answering (free tier is ~15).
+    #[arg(long, env = "MIRAGE_RPM", default_value_t = 10)]
+    rpm: u32,
+
+    /// Retries per request when the API reports rate limiting.
+    #[arg(long, env = "MIRAGE_MAX_RETRIES", default_value_t = 6)]
+    max_retries: u32,
 }
 
 #[tokio::main]
@@ -51,19 +59,26 @@ async fn main() -> Result<()> {
         total
     );
 
-    let answers = if args.no_answers {
-        None
-    } else {
-        let context = LlmContext {
-            client,
-            model: args.model,
-        };
-        tracing::info!("answering...");
-        let answers = quiz.answer(&context).await?;
-        Some(answers)
-    };
+    if args.no_answers {
+        print!("{}", output::render_quiz(&quiz, None));
+        return Ok(());
+    }
 
-    print!("{}", output::render_quiz(&quiz, answers.as_deref()));
-
-    Ok(())
+    let rpm = args.rpm.clamp(1, 60);
+    tracing::info!("answering {total} question(s) at ~{rpm} req/min...");
+    let context = LlmContext::new(client, args.model, rpm, args.max_retries);
+    match quiz.answer(&context).await {
+        Ok(answers) => {
+            print!("{}", output::render_quiz(&quiz, Some(&answers)));
+            Ok(())
+        }
+        Err(err) => {
+            // Don't lose the transcription after minutes of paced requests:
+            // print it answer-free before failing with a one-line message
+            // (the raw error embeds a huge proto details blob).
+            print!("{}", output::render_quiz(&quiz, None));
+            Err(anyhow::anyhow!(err.friendly())
+                .context("answering failed (transcript printed above)"))
+        }
+    }
 }

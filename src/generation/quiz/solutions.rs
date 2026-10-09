@@ -1,8 +1,10 @@
 use super::{Quiz, QuizQuestion, QuizSection};
-use super::super::errors::LlmError;
+use super::super::errors::{backoff_delay, LlmError};
+use super::super::queue::Throttle;
 use super::prompts::ANSWER_QUESTION;
 use google_ai_rs::{Client, GenerativeModel};
 use std::fmt;
+use tokio::time::sleep;
 
 #[derive(Debug, Clone)]
 pub struct Answer(pub String);
@@ -24,9 +26,23 @@ impl fmt::Display for Answer {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct LlmContext {
     pub client: Client,
     pub model: String,
+    pub throttle: Throttle,
+    pub max_retries: u32,
+}
+
+impl LlmContext {
+    pub fn new(client: Client, model: String, rpm: u32, max_retries: u32) -> Self {
+        Self {
+            client,
+            model,
+            throttle: Throttle::from_rpm(rpm),
+            max_retries,
+        }
+    }
 }
 
 pub trait Answerable {
@@ -37,18 +53,37 @@ pub trait Answerable {
 }
 
 async fn llm(
-    client: &Client,
-    model: &str,
+    context: &LlmContext,
     prompt: &str,
     system: &str,
 ) -> Result<String, LlmError> {
-    let mut gen_model: GenerativeModel = client.generative_model(model);
-    if !system.is_empty() {
-        gen_model = gen_model.with_system_instruction(system);
-    }
+    let mut attempt: u32 = 0;
+    loop {
+        context.throttle.wait().await;
 
-    let response = gen_model.generate_content(prompt).await?;
-    Ok(response.text().to_string())
+        let mut gen_model: GenerativeModel = context.client.generative_model(&context.model);
+        if !system.is_empty() {
+            gen_model = gen_model.with_system_instruction(system);
+        }
+
+        match gen_model.generate_content(prompt).await {
+            Ok(response) => return Ok(response.text().to_string()),
+            Err(err) => {
+                attempt += 1;
+                let err = LlmError::from(err);
+                if !err.is_rate_limited() || attempt > context.max_retries {
+                    return Err(err);
+                }
+                let delay = err.retry_after().unwrap_or_else(|| backoff_delay(attempt));
+                tracing::warn!(
+                    "rate limited (attempt {attempt}/{}), retrying in {:.0}s...",
+                    context.max_retries,
+                    delay.as_secs_f64(),
+                );
+                sleep(delay).await;
+            }
+        }
+    }
 }
 
 fn prompt_for(question: &QuizQuestion) -> String {
@@ -69,13 +104,7 @@ impl Answerable for QuizQuestion {
 
     async fn answer(&self, context: &LlmContext) -> Result<Self::Output, Self::Error> {
         let prompt = prompt_for(self);
-        let response = llm(
-            &context.client,
-            &context.model,
-            &prompt,
-            ANSWER_QUESTION,
-        )
-        .await?;
+        let response = llm(context, &prompt, ANSWER_QUESTION).await?;
 
         Ok(Answer(response))
     }
