@@ -35,3 +35,11 @@ pub enum QuizError {
     #[error("Model returned an invalid quiz: {0}")]
     Invalid(#[from] QuizValidationError),
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum QuizFromImageError {
+    #[error(transparent)]
+    Response(#[from] QuizError),
+    #[error(transparent)]
+    Validation(#[from] QuizValidationError),
+}

@@ -1,6 +1,10 @@
-use std::{error::Error, path::Path};
+use crate::generation::errors::QuizFromImageError;
+
+use super::prompts;
+use super::image::load_image_part;
+use std::path::Path;
 use super::errors::{QuizError, QuizValidationError};
-use google_ai_rs::{content::TryIntoContents, AsSchema, Client, Content, Part};
+use google_ai_rs::{AsSchema, Client};
 use serde::Deserialize;
 
 /// A single question in a quiz
@@ -49,6 +53,22 @@ struct QuizResponse {
     pub sections: Vec<QuizSection>,
 }
 
+impl QuizResponse {
+    pub async fn from_image(client: &Client, model_name: &str, image_path: impl AsRef<Path>) -> Result<Self, QuizError> {
+        let image = load_image_part(image_path.as_ref())?;
+
+        let model = client.typed_model::<QuizResponse>(model_name);
+        let response = model.generate_content((super::prompts::quiz_image_to_encoded, image)).await?;
+        Ok(response)
+    }
+}
+
+impl Quiz {
+    pub async fn from_image(client: &Client, model_name: &str, image_path: impl AsRef<Path>) -> Result<Self, QuizFromImageError> {
+        let quiz_response = QuizResponse::from_image(client, model_name, image_path).await?;
+        Ok(Self::try_from(quiz_response)?)
+    }
+}
 
 impl TryFrom<QuizResponse> for Quiz {
     type Error = QuizValidationError;
