@@ -1,7 +1,6 @@
-mod prompts;
+pub mod image;
 pub mod quiz;
-pub mod errors;
-mod image;
+
 use google_ai_rs::{Client, GenerativeModel};
 
 #[allow(dead_code)]

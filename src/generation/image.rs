@@ -1,9 +1,22 @@
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use google_ai_rs::Part;
-use super::errors::QuizError;
+use thiserror::Error;
 
+#[derive(Debug, Error)]
 #[allow(dead_code)]
-fn mime_for(path: &Path) -> Result<&'static str, QuizError> {
+pub enum ImageError {
+    #[error("Unsupported image extension: {0:?}")]
+    UnsupportedImage(Option<String>),
+    #[error("Failed to read image {}: {source}", path.display())]
+    ReadImage {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+}
+
+fn mime_for(path: &Path) -> Result<&'static str, ImageError> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -14,15 +27,15 @@ fn mime_for(path: &Path) -> Result<&'static str, QuizError> {
         Some("webp") => Ok("image/webp"),
         Some("heic") => Ok("image/heic"),
         Some("heif") => Ok("image/heif"),
-        _ => Err(QuizError::UnsupportedImage(ext)),
+        _ => Err(ImageError::UnsupportedImage(ext)),
     }
 }
 
 /// Reads an image file into a `Part` ready to send to the model.
 #[allow(dead_code)]
-pub fn load_image_part(path: &Path) -> Result<Part, QuizError> {
+pub fn load_image_part(path: &Path) -> Result<Part, ImageError> {
     let mime = mime_for(path)?;
-    let bytes = std::fs::read(path).map_err(|source| QuizError::ReadImage {
+    let bytes = std::fs::read(path).map_err(|source| ImageError::ReadImage {
         path: path.to_path_buf(),
         source,
     })?;

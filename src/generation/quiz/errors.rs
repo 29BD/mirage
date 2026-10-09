@@ -1,5 +1,4 @@
-use std::io;
-use std::path::PathBuf;
+use crate::generation::image::ImageError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -20,25 +19,19 @@ pub enum QuizValidationError {
         got: usize,
     },
 }
- 
+
 #[derive(Debug, Error)]
 #[allow(dead_code)]
 pub enum QuizError {
-    #[error("Unsupported image extension: {0:?}")]
-    UnsupportedImage(Option<String>),
-    #[error("Failed to read image {}: {source}", path.display())]
-    ReadImage {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
+    #[error(transparent)]
+    Image(#[from] ImageError),
     #[error("Gemini request failed: {0}")]
     Api(#[from] google_ai_rs::Error),
     #[error("Model returned an invalid quiz: {0}")]
     Invalid(#[from] QuizValidationError),
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 #[allow(dead_code)]
 pub enum QuizFromImageError {
     #[error(transparent)]

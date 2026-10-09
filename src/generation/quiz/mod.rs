@@ -1,10 +1,11 @@
-use crate::generation::errors::QuizFromImageError;
+pub mod errors;
+mod prompts;
 
-use super::image::load_image_part;
-use std::path::Path;
-use super::errors::{QuizError, QuizValidationError};
+use crate::generation::image::load_image_part;
+use errors::{QuizError, QuizFromImageError, QuizValidationError};
 use google_ai_rs::{AsSchema, Client};
 use serde::Deserialize;
+use std::path::Path;
 
 /// A single question in a quiz
 #[allow(dead_code)]
@@ -30,8 +31,8 @@ pub enum QuizQuestion {
 }
 
 /// A single _section_ in a quiz.
-/// 
-/// A section breaks up long quizzes into different parts. Typically, each 
+///
+/// A section breaks up long quizzes into different parts. Typically, each
 /// section holds questions of the same variant. Short quizzes may hold only
 /// one section that spans the entire scope of the quiz.
 #[allow(dead_code)]
@@ -62,7 +63,7 @@ impl QuizResponse {
         let image = load_image_part(image_path.as_ref())?;
 
         let model = client.typed_model::<QuizResponse>(model_name);
-        let response = model.generate_content((super::prompts::QUIZ_IMAGE_TO_ENCODED, image)).await?;
+        let response = model.generate_content((prompts::QUIZ_IMAGE_TO_ENCODED, image)).await?;
         Ok(response)
     }
 }
@@ -77,7 +78,7 @@ impl Quiz {
 
 impl TryFrom<QuizResponse> for Quiz {
     type Error = QuizValidationError;
- 
+
     fn try_from(r: QuizResponse) -> Result<Self, Self::Error> {
         if r.sections.is_empty() {
             return Err(QuizValidationError::NoSections);
@@ -119,6 +120,7 @@ impl TryFrom<QuizResponse> for Quiz {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generation::image::ImageError;
     use std::path::PathBuf;
 
     /// Default model for the live test. Override with `GEMINI_MODEL`.
@@ -156,7 +158,7 @@ mod tests {
     fn load_image_part_rejects_unsupported_extension() {
         let err = load_image_part(Path::new("quiz.txt")).unwrap_err();
         assert!(
-            matches!(err, QuizError::UnsupportedImage(_)),
+            matches!(err, ImageError::UnsupportedImage(_)),
             "expected UnsupportedImage, got {err:?}"
         );
     }
@@ -169,7 +171,7 @@ mod tests {
             .join("does-not-exist.png");
         let err = load_image_part(&missing).unwrap_err();
         assert!(
-            matches!(err, QuizError::ReadImage { .. }),
+            matches!(err, ImageError::ReadImage { .. }),
             "expected ReadImage, got {err:?}"
         );
     }
@@ -196,7 +198,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                QuizFromImageError::Response(QuizError::ReadImage { .. })
+                QuizFromImageError::Response(QuizError::Image(ImageError::ReadImage { .. }))
             ),
             "expected ReadImage error, got {err:?}"
         );

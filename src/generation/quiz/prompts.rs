@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 pub const QUIZ_IMAGE_TO_ENCODED: &str = "\
 The attached image is a quiz, worksheet, or page of study material. \
 Extract every question from it into the requested structure, preserving the original order and wording. \
