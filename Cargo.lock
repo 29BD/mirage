@@ -455,6 +455,7 @@ dependencies = [
  "google-ai-rs",
  "serde",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
