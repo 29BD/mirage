@@ -1,9 +1,28 @@
-use super::{QuizQuestion, QuizSection, Quiz};
-use google_ai_rs::{GenerativeModel, Client};
+use super::{Quiz, QuizQuestion, QuizSection};
 use super::super::errors::LlmError;
 use super::prompts::ANSWER_QUESTION;
+use google_ai_rs::{Client, GenerativeModel};
+use std::fmt;
 
-pub struct Answer(String);
+#[derive(Debug, Clone)]
+pub struct Answer(pub String);
+
+impl Answer {
+    pub fn text(&self) -> &str {
+        &self.0
+    }
+
+    #[allow(dead_code)]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for Answer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.trim())
+    }
+}
 
 pub struct LlmContext {
     pub client: Client,
@@ -29,33 +48,64 @@ async fn llm(
     }
 
     let response = gen_model.generate_content(prompt).await?;
-    let text = response.text().to_string();
-    Ok(text)
+    Ok(response.text().to_string())
 }
 
+fn prompt_for(question: &QuizQuestion) -> String {
+    match question {
+        QuizQuestion::MultipleChoice { question, options } => {
+            format!("{question}\nOptions: {}", options.join(", "))
+        }
+        QuizQuestion::TrueFalse { question } => {
+            format!("{question}\nOptions: True, False")
+        }
+        QuizQuestion::OtherQuestion { question } => question.clone(),
+    }
+}
 
 impl Answerable for QuizQuestion {
     type Error = LlmError;
     type Output = Answer;
 
     async fn answer(&self, context: &LlmContext) -> Result<Self::Output, Self::Error> {
-        let (instructions, options) = match self {
-            QuizQuestion::MultipleChoice { question, options } => (question, Some(options)),
-            QuizQuestion::TrueFalse { question } => (question, Some(&vec!["True".to_owned(), "False".to_owned()])),
-            QuizQuestion::OtherQuestion { question } => (question, None),
-        };
-
+        let prompt = prompt_for(self);
         let response = llm(
-            &context.client, 
-            &context.model, 
-            &format!(
-                "{}\n{}",
-                instructions,
-                options.unwrap_or(&vec!["".to_owned()]).join(", "),
-            ),
-            ANSWER_QUESTION
-        ).await?;
+            &context.client,
+            &context.model,
+            &prompt,
+            ANSWER_QUESTION,
+        )
+        .await?;
 
         Ok(Answer(response))
+    }
+}
+
+impl Answerable for QuizSection {
+    type Error = LlmError;
+    type Output = Vec<Answer>;
+
+    async fn answer(&self, context: &LlmContext) -> Result<Self::Output, Self::Error> {
+        let mut answers = Vec::with_capacity(self.questions.len());
+        for (i, question) in self.questions.iter().enumerate() {
+            tracing::debug!("answering question {}...", i + 1);
+            answers.push(question.answer(context).await?);
+        }
+        Ok(answers)
+    }
+}
+
+impl Answerable for Quiz {
+    type Error = LlmError;
+    type Output = Vec<Vec<Answer>>;
+
+    async fn answer(&self, context: &LlmContext) -> Result<Self::Output, Self::Error> {
+        let mut all = Vec::with_capacity(self.0.len());
+        for (i, section) in self.0.iter().enumerate() {
+            let answers = section.answer(context).await?;
+            tracing::info!("section {} finished...", i + 1);
+            all.push(answers);
+        }
+        Ok(all)
     }
 }
