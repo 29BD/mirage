@@ -1,3 +1,4 @@
+pub mod solutions;
 pub mod errors;
 mod prompts;
 

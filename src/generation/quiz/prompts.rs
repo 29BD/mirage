@@ -6,3 +6,10 @@ Copy any instructions printed for a section into that section's `instructions`. 
 Classify each question as multiple choice (only when answer options are printed), true/false, or other. \
 Do not invent questions or answer options that are not in the image, and do not answer the questions. \
 Disregard anything that is not a part of the quiz nor is something that needs an answer (explicitly or implicitly). Example: rubrics";
+
+pub const ANSWER_QUESTION: &str = "\
+You're meant to answer questions in a quiz. Only respond with answers, keep it concise.\
+Answer the following question in the format that it requests. Follow instructions, and keep the answer accurate. \
+If the question requires a fixed set of answers (e.g., true/false, multiple choice), restrict your reply to only the possible responses. \
+Otherwise, keep your answer less than two sentences long, and make sure it's clear. \
+You do _not_ need to explain your answer.";
