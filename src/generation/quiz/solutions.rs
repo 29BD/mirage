@@ -194,6 +194,24 @@ impl LlmContext {
         }
     }
 
+    /// Same as [`Self::new`], but shares an existing [`Throttle`] (e.g. a
+    /// global limiter) instead of minting a fresh per-quiz one, so concurrent
+    /// quizzes pace against one request slot.
+    pub fn with_throttle(
+        client: Client,
+        model: String,
+        throttle: Throttle,
+        max_retries: u32,
+    ) -> Self {
+        Self {
+            client,
+            model,
+            throttle,
+            max_retries,
+            calls: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
     /// Number of LLM requests issued through this context (incl. retries).
     pub fn calls(&self) -> u64 {
         self.calls.load(Ordering::Relaxed)

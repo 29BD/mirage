@@ -78,7 +78,7 @@ struct QuizResponse {
 
 #[allow(dead_code)]
 impl QuizResponse {
-    #[tracing::instrument(skip(client, image_path), fields(model = %model_name))]
+    #[tracing::instrument(skip(client, image_path, model_name), fields(model = %model_name))]
     pub async fn from_image(
         client: &Client,
         model_name: &str,
@@ -100,7 +100,7 @@ impl QuizResponse {
         Ok(response)
     }
 
-    #[tracing::instrument(skip(client), fields(model = %model_name, image_url = %image_url))]
+    #[tracing::instrument(skip(client, model_name, image_url), fields(model = %model_name))]
     pub async fn from_image_url(
         client: &Client,
         model_name: &str,
@@ -142,7 +142,7 @@ const TRANSCRIBE_ATTEMPTS: u32 = 3;
 
 #[allow(dead_code)]
 impl Quiz {
-    #[tracing::instrument(skip(client, image_path), fields(model = %model_name))]
+    #[tracing::instrument(skip(client, image_path, model_name), fields(model = %model_name))]
     pub async fn from_image(
         client: &Client,
         model_name: &str,
@@ -185,7 +185,7 @@ impl Quiz {
         Err(err.into())
     }
 
-    #[tracing::instrument(skip(client), fields(model = %model_name, image_url = %image_url))]
+    #[tracing::instrument(skip(client, model_name, image_url), fields(model = %model_name))]
     pub async fn from_image_url(
         client: &Client,
         model_name: &str,

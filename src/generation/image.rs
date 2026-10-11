@@ -53,7 +53,7 @@ fn mime_for_url(url: &str) -> Result<&'static str, ImageError> {
 /// from the URL path extension, mirroring [`load_image_part`].
 pub fn load_image_url_part(url: &str) -> Result<Part, ImageError> {
     let mime = mime_for_url(url)?;
-    tracing::debug!(url = %url, mime = %mime, "using remote image reference");
+    tracing::debug!(mime = %mime, url_len = url.len(), "using remote image reference");
     Ok(Part::file_data(mime, url))
 }
 
@@ -63,7 +63,7 @@ pub fn load_image_url_part(url: &str) -> Result<Part, ImageError> {
 pub fn image_url_part_with_mime(url: &str, mime: &str) -> Result<Part, ImageError> {
     let lower = url.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("gs://") {
-        tracing::debug!(url = %url, mime = %mime, "using remote image reference with explicit mime");
+        tracing::debug!(mime = %mime, url_len = url.len(), "using remote image reference with explicit mime");
         Ok(Part::file_data(mime, url))
     } else {
         Err(ImageError::InvalidUrl(url.to_string()))
