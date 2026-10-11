@@ -4,14 +4,14 @@ use mirage::generation::quiz::solutions::{Answerable, LlmContext};
 use mirage::generation::quiz::Quiz;
 use mirage::output;
 use google_ai_rs::Client;
-use std::path::PathBuf;
 
 /// Transcribe a quiz image into pretty markdown, with answers.
 #[derive(Debug, Parser)]
 #[command(name = "mirage", version, about = "Transcribe quiz images to markdown + answers")]
 struct Args {
-    /// Path to the quiz image (png, jpg/jpeg, webp, heic/heif).
-    image: PathBuf,
+    /// Path to the quiz image (png, jpg/jpeg, webp, heic/heif), or a public
+    /// http(s):// image URL.
+    image: String,
 
     /// Gemini model to use for transcription and answering.
     #[arg(long, env = "GEMINI_MODEL", default_value = "gemini-3.1-flash-lite")]
@@ -48,8 +48,8 @@ async fn main() -> Result<()> {
     }
     let client = Client::new(api_key).await.context("failed to create client")?;
 
-    tracing::info!("transcribing {}...", args.image.display());
-    let quiz = Quiz::from_image(&client, &args.model, &args.image).await?;
+    tracing::info!("transcribing {}...", args.image);
+    let quiz = Quiz::from_image_or_url(&client, &args.model, &args.image).await?;
     let total: usize = quiz.0.iter().map(|s| s.questions.len()).sum();
     tracing::info!(
         "transcribed {} section(s), {} question(s)",

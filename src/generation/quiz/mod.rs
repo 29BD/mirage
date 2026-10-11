@@ -2,7 +2,7 @@ pub mod solutions;
 pub mod errors;
 mod prompts;
 
-use crate::generation::image::load_image_part;
+use crate::generation::image::{is_image_url, load_image_part, load_image_url_part};
 use errors::{QuizError, QuizFromImageError, QuizValidationError};
 use google_ai_rs::{AsSchema, Client};
 use serde::Deserialize;
@@ -77,6 +77,27 @@ impl QuizResponse {
         let response = model.generate_content((prompts::QUIZ_IMAGE_TO_ENCODED, image)).await?;
         Ok(response)
     }
+
+    pub async fn from_image_url(client: &Client, model_name: &str, image_url: &str) -> Result<Self, QuizError> {
+        let image = load_image_url_part(image_url)?;
+
+        let model = client.typed_model::<QuizResponse>(model_name);
+        let response = model.generate_content((prompts::QUIZ_IMAGE_TO_ENCODED, image)).await?;
+        Ok(response)
+    }
+
+    /// Accepts either a local path or an `http(s)://` image URL.
+    pub async fn from_image_or_url(
+        client: &Client,
+        model_name: &str,
+        image: &str,
+    ) -> Result<Self, QuizError> {
+        if is_image_url(image) {
+            Self::from_image_url(client, model_name, image).await
+        } else {
+            Self::from_image(client, model_name, Path::new(image)).await
+        }
+    }
 }
 
 /// Transcription attempts: sampling is stochastic, so a reply that fails
@@ -107,6 +128,43 @@ impl Quiz {
         Err(last_error
             .expect("attempts non-empty")
             .into())
+    }
+
+    pub async fn from_image_url(
+        client: &Client,
+        model_name: &str,
+        image_url: &str,
+    ) -> Result<Self, QuizFromImageError> {
+        let mut last_error = None;
+        for attempt in 1..=TRANSCRIBE_ATTEMPTS {
+            let quiz_response =
+                QuizResponse::from_image_url(client, model_name, image_url).await?;
+            match Self::try_from(quiz_response) {
+                Ok(quiz) => return Ok(quiz),
+                Err(err) => {
+                    tracing::warn!(
+                        "transcription failed validation (attempt {attempt}/{TRANSCRIBE_ATTEMPTS}): {err}"
+                    );
+                    last_error = Some(err);
+                }
+            }
+        }
+        Err(last_error
+            .expect("attempts non-empty")
+            .into())
+    }
+
+    /// Accepts either a local path or an `http(s)://` image URL.
+    pub async fn from_image_or_url(
+        client: &Client,
+        model_name: &str,
+        image: &str,
+    ) -> Result<Self, QuizFromImageError> {
+        if is_image_url(image) {
+            Self::from_image_url(client, model_name, image).await
+        } else {
+            Self::from_image(client, model_name, Path::new(image)).await
+        }
     }
 }
 
@@ -217,7 +275,9 @@ fn strip_option_label(s: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generation::image::ImageError;
+    use crate::generation::image::{
+        ImageError, image_url_part_with_mime, is_image_url, load_image_url_part,
+    };
     use std::path::PathBuf;
 
     /// Default model for the live test. Override with `GEMINI_MODEL`.
@@ -271,6 +331,69 @@ mod tests {
         assert!(
             matches!(err, ImageError::ReadImage { .. }),
             "expected ReadImage, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn image_url_detection() {
+        assert!(is_image_url("https://example.com/quiz.png"));
+        assert!(is_image_url("http://example.com/quiz.jpg"));
+        assert!(is_image_url("HTTPS://example.com/quiz.webp"));
+        assert!(!is_image_url("tests/fixtures/math_quiz.png"));
+        assert!(!is_image_url("quiz.png"));
+        assert!(!is_image_url("ftp://example.com/quiz.png"));
+    }
+
+    #[test]
+    fn load_image_url_part_accepts_http_urls() {
+        for url in [
+            "https://example.com/quiz.png",
+            "https://example.com/photos/quiz.JPG?size=large",
+            "https://example.com/a/b/quiz.webp#frag",
+            "http://example.com/quiz.heic",
+            "https://example.com/quiz.heif",
+        ] {
+            let part = load_image_url_part(url)
+                .unwrap_or_else(|e| panic!("{url} should load as image Part: {e:?}"));
+            let _ = part;
+        }
+    }
+
+    #[test]
+    fn load_image_url_part_rejects_non_urls() {
+        let err = load_image_url_part("tests/fixtures/math_quiz.png").unwrap_err();
+        assert!(
+            matches!(err, ImageError::InvalidUrl(_)),
+            "expected InvalidUrl, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn load_image_url_part_rejects_unsupported_extension() {
+        let err = load_image_url_part("https://example.com/quiz.txt").unwrap_err();
+        assert!(
+            matches!(err, ImageError::UnsupportedImage(_)),
+            "expected UnsupportedImage, got {err:?}"
+        );
+        let err = load_image_url_part("https://example.com/quiz").unwrap_err();
+        assert!(
+            matches!(err, ImageError::UnsupportedImage(_)),
+            "expected UnsupportedImage, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn image_url_part_with_mime_accepts_extensionless_uris() {
+        let part = image_url_part_with_mime(
+            "https://generativelanguage.googleapis.com/v1beta/files/abc123",
+            "image/png",
+        )
+        .expect("Files API URI should build a Part with explicit mime");
+        let _ = part;
+        let err = image_url_part_with_mime("notaurl", "image/png").unwrap_err();
+        assert!(
+            matches!(err, ImageError::InvalidUrl(_)),
+            "expected InvalidUrl, got {err:?}"
         );
     }
 
@@ -340,6 +463,31 @@ mod tests {
                 QuizFromImageError::Response(QuizError::Image(ImageError::ReadImage { .. }))
             ),
             "expected ReadImage error, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn from_image_url_rejects_bad_url_without_network() {
+        let client = Client::new("dummy-key-for-offline-test").await.unwrap();
+        let err = Quiz::from_image_url(&client, DEFAULT_TEST_MODEL, "https://example.com/quiz.txt")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                QuizFromImageError::Response(QuizError::Image(ImageError::UnsupportedImage(_)))
+            ),
+            "expected UnsupportedImage error, got {err:?}"
+        );
+        let err = Quiz::from_image_or_url(&client, DEFAULT_TEST_MODEL, "https://example.com/quiz.txt")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                QuizFromImageError::Response(QuizError::Image(ImageError::UnsupportedImage(_)))
+            ),
+            "expected UnsupportedImage error via from_image_or_url, got {err:?}"
         );
     }
 
