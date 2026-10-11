@@ -55,6 +55,86 @@ impl fmt::Display for Answer {
     }
 }
 
+/// Plain-text check for answers: reject LaTeX and markdown markers.
+/// The robot writes with a pen, so `$`, `\`, backticks, and `**` are out.
+pub fn is_plain_text(s: &str) -> bool {
+    !(s.contains('$') || s.contains('\\') || s.contains('`') || s.contains("**"))
+}
+
+/// Count sentences by splitting on `.`, `!`, `?` runs.
+pub fn count_sentences(s: &str) -> usize {
+    s.split(['.', '!', '?'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .count()
+}
+
+/// Parse a generic `N-M sentences` requirement out of section instructions.
+pub fn parse_sentence_range(instructions: &str) -> Option<(usize, usize)> {
+    let chars: Vec<char> = instructions.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_ascii_digit() {
+            let mut j = i;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            let lo: usize = chars[i..j].iter().collect::<String>().parse().ok()?;
+            let mut k = j;
+            while k < chars.len() && (chars[k] == ' ' || chars[k] == '\t') {
+                k += 1;
+            }
+            if k < chars.len() && (chars[k] == '-' || chars[k] == '–' || chars[k] == '—') {
+                k += 1;
+                while k < chars.len() && (chars[k] == ' ' || chars[k] == '\t') {
+                    k += 1;
+                }
+                let m = k;
+                while k < chars.len() && chars[k].is_ascii_digit() {
+                    k += 1;
+                }
+                if k > m {
+                    let hi: usize = chars[m..k].iter().collect::<String>().parse().ok()?;
+                    let tail: String = chars[k..].iter().collect::<String>();
+                    if tail.trim_start().to_ascii_lowercase().starts_with("sentence") {
+                        return Some((lo, hi));
+                    }
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// Whether section instructions ask for shown work/a solution.
+pub fn requires_show_work(instructions: &str) -> bool {
+    let lower = instructions.to_ascii_lowercase();
+    lower.contains("show") && (lower.contains("work") || lower.contains("solution"))
+}
+
+/// System prompt for a section: base rules plus that section's instructions
+/// as hard constraints, with generic reinforcements the model tends to drop
+/// (show-work, sentence counts).
+pub fn system_for_section(instructions: Option<&str>) -> String {
+    let mut system = String::from(ANSWER_QUESTION);
+    if let Some(raw) = instructions.map(str::trim).filter(|s| !s.is_empty()) {
+        system.push_str("\nSection instructions (hard constraints, must obey exactly): ");
+        system.push_str(raw);
+        if requires_show_work(raw) {
+            system.push_str(" Show brief work before each final answer in this section.");
+        }
+        if let Some((lo, hi)) = parse_sentence_range(raw) {
+            system.push_str(&format!(
+                " Free-response answers in this section must be {lo}-{hi} sentences long."
+            ));
+        }
+    }
+    system
+}
+
 /// Parse a modified true/false reply (`TRUE`, or `FALSE — <replacement for
 /// the **bold** span>`). The verdict is the first word; anything after a
 /// `—`/`-`/`:`/`,` separator is the correction.
@@ -187,10 +267,11 @@ impl Answerable for QuizSection {
     type Output = Vec<Answer>;
 
     async fn answer(&self, context: &LlmContext) -> Result<Self::Output, Self::Error> {
+        let system = system_for_section(self.instructions.as_deref());
         let mut answers = Vec::with_capacity(self.questions.len());
         for (i, question) in self.questions.iter().enumerate() {
             tracing::debug!("answering question {}...", i + 1);
-            answers.push(question.answer(context).await?);
+            answers.push(question.answer_with(context, &system).await?);
         }
         Ok(answers)
     }
@@ -266,5 +347,53 @@ mod tests {
         assert!(f.is_complete());
         assert_eq!(f.text(), "FALSE — 180°");
         assert!(!Answer::Simple("  ".to_string()).is_complete());
+    }
+
+    #[test]
+    fn plain_text_rejects_latex_and_markdown() {
+        assert!(is_plain_text("x = 7, y = 3"));
+        assert!(is_plain_text("The sale price is P680."));
+        assert!(!is_plain_text("x = \\frac{3}{4}"));
+        assert!(!is_plain_text("$x = 5$"));
+        assert!(!is_plain_text("**bold** answer"));
+        assert!(!is_plain_text("`code`"));
+    }
+
+    #[test]
+    fn sentence_range_parses_generic_counts() {
+        assert_eq!(
+            parse_sentence_range("In 3-5 sentences, explain why."),
+            Some((3, 5))
+        );
+        assert_eq!(
+            parse_sentence_range("Answer in 2 – 4 sentences."),
+            Some((2, 4))
+        );
+        assert_eq!(parse_sentence_range("Show your work."), None);
+        assert_eq!(parse_sentence_range("15 points, 3 points each"), None);
+    }
+
+    #[test]
+    fn instructions_detect_show_work() {
+        assert!(requires_show_work("Show your complete solution."));
+        assert!(requires_show_work("Show your work where indicated."));
+        assert!(!requires_show_work("Circle the letter."));
+    }
+
+    #[test]
+    fn section_system_embeds_instructions() {
+        let system = system_for_section(Some("In 3-5 sentences, explain why."));
+        assert!(system.contains("hard constraints"));
+        assert!(system.contains("In 3-5 sentences"));
+        assert!(system.contains("3-5 sentences long"));
+        assert!(system.contains("plain text only"));
+        let bare = system_for_section(None);
+        assert!(!bare.contains("must obey exactly"));
+    }
+
+    #[test]
+    fn counts_sentences() {
+        assert_eq!(count_sentences("One. Two! Three?"), 3);
+        assert_eq!(count_sentences("  "), 0);
     }
 }
