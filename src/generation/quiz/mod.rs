@@ -8,25 +8,30 @@ use google_ai_rs::{AsSchema, Client};
 use serde::Deserialize;
 use std::path::Path;
 
-/// A single question in a quiz
+/// A single question in a quiz.
+///
+/// Labels are stored separately: `question` and `options` hold bare text
+/// without printed numbers or letters (the renderer adds `1)`, `a)`, ...).
+/// Emphasized spans (bold/underline in the source) are kept inline as
+/// `**...**` markdown.
 #[allow(dead_code)]
 #[derive(AsSchema, Deserialize, Debug)]
 pub enum QuizQuestion {
     #[schema(description = "A question with pre-defined answers that you have to choose from")]
     MultipleChoice {
-        #[schema(description = "The given question")]
+        #[schema(description = "The given question, without its printed number")]
         question: String,
-        #[schema(description = "Options in a list")]
+        #[schema(description = "Options as bare text, without printed letters or bullets")]
         options: Vec<String>,
     },
     #[schema(description = "A true or false question")]
     TrueFalse {
-        #[schema(description = "The given question")]
+        #[schema(description = "The given question, without its printed number")]
         question: String,
     },
     #[schema(description = "Any other kind of question. Be it true or false modified, essay questions...")]
     OtherQuestion {
-        #[schema(description = "The given question")]
+        #[schema(description = "The given question, without its printed number; wrap emphasized spans in **...**")]
         question: String,
     },
 }
@@ -80,20 +85,24 @@ impl Quiz {
 impl TryFrom<QuizResponse> for Quiz {
     type Error = QuizValidationError;
 
-    fn try_from(r: QuizResponse) -> Result<Self, Self::Error> {
+    fn try_from(mut r: QuizResponse) -> Result<Self, Self::Error> {
         if r.sections.is_empty() {
             return Err(QuizValidationError::NoSections);
         }
-        for (section, s) in r.sections.iter().enumerate() {
+        for (section, s) in r.sections.iter_mut().enumerate() {
             if s.questions.is_empty() {
                 return Err(QuizValidationError::EmptySection { section });
             }
-            for (question, q) in s.questions.iter().enumerate() {
+            for (question, q) in s.questions.iter_mut().enumerate() {
                 match q {
                     QuizQuestion::MultipleChoice {
                         question: text,
                         options,
                     } => {
+                        *text = strip_question_label(text).to_string();
+                        for option in options.iter_mut() {
+                            *option = strip_option_label(option).to_string();
+                        }
                         if text.trim().is_empty() {
                             return Err(QuizValidationError::EmptyQuestion { section, question });
                         }
@@ -107,6 +116,7 @@ impl TryFrom<QuizResponse> for Quiz {
                     }
                     QuizQuestion::TrueFalse { question: text }
                     | QuizQuestion::OtherQuestion { question: text } => {
+                        *text = strip_question_label(text).to_string();
                         if text.trim().is_empty() {
                             return Err(QuizValidationError::EmptyQuestion { section, question });
                         }
@@ -116,6 +126,63 @@ impl TryFrom<QuizResponse> for Quiz {
         }
         Ok(Quiz(r.sections))
     }
+}
+
+/// Strip a leading question number (`1.`, `2)`) the model may have copied
+/// despite being told not to. Only strips ASCII digits followed by `.` or
+/// `)` plus whitespace, so content like `3x + 5 = 20` is untouched.
+fn strip_question_label(s: &str) -> &str {
+    let t = s.trim_start();
+    let digits = t.len() - t.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if digits > 0 {
+        if let Some(rest) = t.get(digits..) {
+            let mut chars = rest.chars();
+            match chars.next() {
+                Some('.') | Some(')') => {
+                    let after = chars.as_str();
+                    if after.starts_with(char::is_whitespace) {
+                        return after.trim_start();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    t
+}
+
+/// Strip a leading option marker (`- A.`, `b)`, `C.`) the model may have
+/// copied. Only strips a single letter plus `.`/`)` plus whitespace, so
+/// numeric options like `48` are untouched.
+fn strip_option_label(s: &str) -> &str {
+    let mut t = s.trim_start();
+    loop {
+        let stripped = t
+            .strip_prefix("- ")
+            .or_else(|| t.strip_prefix("* "))
+            .or_else(|| t.strip_prefix("• "));
+        match stripped {
+            Some(rest) => t = rest.trim_start(),
+            None => break,
+        }
+    }
+    let mut chars = t.chars();
+    if let Some(c) = chars.next() {
+        if c.is_ascii_alphabetic() {
+            let after = chars.as_str();
+            let mut rest = after.chars();
+            match rest.next() {
+                Some('.') | Some(')') => {
+                    let tail = rest.as_str();
+                    if !tail.is_empty() && tail.starts_with(char::is_whitespace) {
+                        return tail.trim_start();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    t
 }
 
 #[cfg(test)]
@@ -184,6 +251,47 @@ mod tests {
             err,
             QuizValidationError::NoSections
         ));
+    }
+
+    #[test]
+    fn strip_question_label_removes_numbers() {
+        assert_eq!(strip_question_label("1. What is 2 + 2?"), "What is 2 + 2?");
+        assert_eq!(strip_question_label("12) Solve for x"), "Solve for x");
+        // Content starting with math is untouched.
+        assert_eq!(strip_question_label("3x + 5 = 20"), "3x + 5 = 20");
+        assert_eq!(strip_question_label("2³ = ___"), "2³ = ___");
+        assert_eq!(strip_question_label("  6. Padded"), "Padded");
+    }
+
+    #[test]
+    fn strip_option_label_removes_letters() {
+        assert_eq!(strip_option_label("- A. 48"), "48");
+        assert_eq!(strip_option_label("b) x = 5"), "x = 5");
+        assert_eq!(strip_option_label("C. 36 cm²"), "36 cm²");
+        // Numeric options are untouched.
+        assert_eq!(strip_option_label("48"), "48");
+        assert_eq!(strip_option_label("  - D. 80"), "80");
+    }
+
+    #[test]
+    fn try_from_stores_bare_labels() {
+        let quiz = Quiz::try_from(QuizResponse {
+            sections: vec![QuizSection {
+                instructions: None,
+                questions: vec![QuizQuestion::MultipleChoice {
+                    question: "1. What is 2 + 2?".to_string(),
+                    options: vec!["- A. 3".to_string(), "b) 4".to_string()],
+                }],
+            }],
+        })
+        .expect("labeled transcript should normalize");
+        match &quiz.0[0].questions[0] {
+            QuizQuestion::MultipleChoice { question, options } => {
+                assert_eq!(question, "What is 2 + 2?");
+                assert_eq!(options, &["3".to_string(), "4".to_string()]);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
     }
 
     #[tokio::test]

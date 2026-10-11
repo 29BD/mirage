@@ -4,6 +4,8 @@ Extract every question from it into the requested structure, preserving the orig
 Group questions into sections the way the source does; if it has no visible sections, use a single section. \
 Copy any instructions printed for a section into that section's `instructions`. \
 Classify each question as multiple choice (only when answer options are printed), true/false, or other. \
+Preserve any bold, underlined, or otherwise emphasized span inside question text by wrapping it in `**...**` markdown, keeping it in place. \
+Store question text and options without their printed numbers or letters: do not copy leading `1.`, `2)`, `A.`, `b)` or bullet dashes into the fields. \
 Do not invent questions or answer options that are not in the image, and do not answer the questions. \
 Disregard anything that is not a part of the quiz nor is something that needs an answer (explicitly or implicitly). Example: rubrics";
 
