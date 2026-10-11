@@ -24,12 +24,17 @@ pub enum QuizQuestion {
         #[schema(description = "Options as bare text, without printed letters or bullets")]
         options: Vec<String>,
     },
-    #[schema(description = "A true or false question")]
+    #[schema(description = "A plain true/false question with no emphasized span to correct")]
     TrueFalse {
         #[schema(description = "The given question, without its printed number")]
         question: String,
     },
-    #[schema(description = "Any other kind of question. Be it true or false modified, essay questions...")]
+    #[schema(description = "A true/false question where one span is emphasized (bold/underlined) and the instructions ask to correct that span when the statement is false; keep the span wrapped in **...**")]
+    ModifiedTrueFalse {
+        #[schema(description = "The statement, without its printed number, with the emphasized span wrapped in **...**")]
+        question: String,
+    },
+    #[schema(description = "Any other kind of question, e.g. fill in the blank, problem solving, essay")]
     OtherQuestion {
         #[schema(description = "The given question, without its printed number; wrap emphasized spans in **...**")]
         question: String,
@@ -115,6 +120,7 @@ impl TryFrom<QuizResponse> for Quiz {
                         }
                     }
                     QuizQuestion::TrueFalse { question: text }
+                    | QuizQuestion::ModifiedTrueFalse { question: text }
                     | QuizQuestion::OtherQuestion { question: text } => {
                         *text = strip_question_label(text).to_string();
                         if text.trim().is_empty() {
@@ -396,6 +402,21 @@ mod tests {
             }
         }
 
+        // Part II of the fixture is modified true/false: the corrected span
+        // is emphasized, so each question must carry **...** markdown.
+        assert_eq!(quiz.0[1].questions.len(), 5, "section 1: {:#?}", quiz);
+        for (i, q) in quiz.0[1].questions.iter().enumerate() {
+            match q {
+                QuizQuestion::ModifiedTrueFalse { question } => {
+                    assert!(
+                        question.contains("**"),
+                        "section 1 q{i} should keep the emphasized span in **...**: {question:?}"
+                    );
+                }
+                other => panic!("section 1 q{i} should be ModifiedTrueFalse, got {other:?}"),
+            }
+        }
+
         // Spot-check content from across the doc, not invented text.
         let all_text: String = quiz
             .0
@@ -404,6 +425,7 @@ mod tests {
             .map(|q| match q {
                 QuizQuestion::MultipleChoice { question, .. }
                 | QuizQuestion::TrueFalse { question }
+                | QuizQuestion::ModifiedTrueFalse { question }
                 | QuizQuestion::OtherQuestion { question } => question.as_str(),
             })
             .collect::<Vec<_>>()
