@@ -44,7 +44,7 @@ impl Answer {
             Answer::ModifiedTrueFalse {
                 verdict: false,
                 correction,
-            } => correction.as_ref().map_or(false, |c| !c.trim().is_empty()),
+            } => correction.as_ref().is_some_and(|c| !c.trim().is_empty()),
         }
     }
 
@@ -325,11 +325,10 @@ fn parse_section_answers(section: &QuizSection, raw: &str) -> Option<Vec<Answer>
         }
         if strip_leading_marker(t).is_some() {
             blocks.push(t.to_string());
-        } else if let Some(last) = blocks.last_mut() {
+        } else {
+            let last = blocks.last_mut()?;
             last.push('\n');
             last.push_str(t);
-        } else {
-            return None;
         }
     }
     if blocks.len() != section.questions.len() {

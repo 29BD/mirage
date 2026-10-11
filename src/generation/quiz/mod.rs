@@ -140,18 +140,18 @@ impl TryFrom<QuizResponse> for Quiz {
 fn strip_question_label(s: &str) -> &str {
     let t = s.trim_start();
     let digits = t.len() - t.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-    if digits > 0 {
-        if let Some(rest) = t.get(digits..) {
-            let mut chars = rest.chars();
-            match chars.next() {
-                Some('.') | Some(')') => {
-                    let after = chars.as_str();
-                    if after.starts_with(char::is_whitespace) {
-                        return after.trim_start();
-                    }
+    if digits > 0
+        && let Some(rest) = t.get(digits..)
+    {
+        let mut chars = rest.chars();
+        match chars.next() {
+            Some('.') | Some(')') => {
+                let after = chars.as_str();
+                if after.starts_with(char::is_whitespace) {
+                    return after.trim_start();
                 }
-                _ => {}
             }
+            _ => {}
         }
     }
     t
@@ -173,19 +173,19 @@ fn strip_option_label(s: &str) -> &str {
         }
     }
     let mut chars = t.chars();
-    if let Some(c) = chars.next() {
-        if c.is_ascii_alphabetic() {
-            let after = chars.as_str();
-            let mut rest = after.chars();
-            match rest.next() {
-                Some('.') | Some(')') => {
-                    let tail = rest.as_str();
-                    if !tail.is_empty() && tail.starts_with(char::is_whitespace) {
-                        return tail.trim_start();
-                    }
+    if let Some(c) = chars.next()
+        && c.is_ascii_alphabetic()
+    {
+        let after = chars.as_str();
+        let mut rest = after.chars();
+        match rest.next() {
+            Some('.') | Some(')') => {
+                let tail = rest.as_str();
+                if !tail.is_empty() && tail.starts_with(char::is_whitespace) {
+                    return tail.trim_start();
                 }
-                _ => {}
             }
+            _ => {}
         }
     }
     t
