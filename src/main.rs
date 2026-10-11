@@ -14,7 +14,7 @@ struct Args {
     image: PathBuf,
 
     /// Gemini model to use for transcription and answering.
-    #[arg(long, env = "GEMINI_MODEL", default_value = "gemini-2.5-flash-lite")]
+    #[arg(long, env = "GEMINI_MODEL", default_value = "gemini-3.1-flash-lite")]
     model: String,
 
     /// Only transcribe the quiz; skip generating answers.

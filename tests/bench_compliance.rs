@@ -21,7 +21,7 @@ use std::time::Instant;
 const RUNS: usize = 3;
 const MAX_SOLVE_CALLS: u64 = 6;
 const MAX_SOLVE_MS: u128 = 60_000;
-const DEFAULT_MODEL: &str = "gemini-2.5-flash-lite";
+const DEFAULT_MODEL: &str = "gemini-3.1-flash-lite";
 
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -198,8 +198,9 @@ mod tests {
     use std::path::PathBuf;
 
     /// Default model for the live test. Override with `GEMINI_MODEL`.
-    /// (`gemini-2.0-flash` was retired; the API now suggests the 3.x family.)
-    const DEFAULT_TEST_MODEL: &str = "gemini-2.5-flash-lite";
+    /// (`gemini-2.5-flash-lite` was retired; 3.1-flash-lite is the cheap one
+    /// that still works.)
+    const DEFAULT_TEST_MODEL: &str = "gemini-3.1-flash-lite";
 
     fn fixture_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
