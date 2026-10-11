@@ -51,7 +51,10 @@ fn type_tag(q: &QuizQuestion) -> &'static str {
 /// Generic label-leak check: does stored text still start with a printed
 /// `1.`/`2)`/`A.`/`b)` marker?
 fn has_leading_label(s: &str) -> bool {
-    let t = s.trim_start().trim_start_matches(['-', '*', '•']).trim_start();
+    let t = s
+        .trim_start()
+        .trim_start_matches(['-', '*', '•'])
+        .trim_start();
     let digits = t.len() - t.trim_start_matches(|c: char| c.is_ascii_digit()).len();
     if digits > 0
         && let Some(rest) = t.get(digits..)
@@ -117,15 +120,17 @@ async fn bench_instruction_compliance() {
             let sec_ms = t1.elapsed().as_millis();
             solve_ms_total += sec_ms;
 
-            let range = section.instructions.as_deref().and_then(parse_sentence_range);
+            let range = section
+                .instructions
+                .as_deref()
+                .and_then(parse_sentence_range);
             let work = section
                 .instructions
                 .as_deref()
                 .map(requires_show_work)
                 .unwrap_or(false);
 
-            for (qi, (question, answer)) in
-                section.questions.iter().zip(answers.iter()).enumerate()
+            for (qi, (question, answer)) in section.questions.iter().zip(answers.iter()).enumerate()
             {
                 run_total += 1;
                 let mut failed: Vec<&str> = Vec::new();

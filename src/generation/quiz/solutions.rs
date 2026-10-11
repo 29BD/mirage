@@ -1,7 +1,7 @@
-use super::{Quiz, QuizQuestion, QuizSection};
-use super::super::errors::{backoff_delay, LlmError};
+use super::super::errors::{LlmError, backoff_delay};
 use super::super::queue::Throttle;
 use super::prompts::ANSWER_QUESTION;
+use super::{Quiz, QuizQuestion, QuizSection};
 use crate::output::option_label;
 use google_ai_rs::{Client, GenerativeModel};
 use std::fmt;
@@ -28,7 +28,11 @@ impl Answer {
             Answer::ModifiedTrueFalse {
                 verdict: false,
                 correction,
-            } => match correction.as_ref().map(|c| c.trim()).filter(|c| !c.is_empty()) {
+            } => match correction
+                .as_ref()
+                .map(|c| c.trim())
+                .filter(|c| !c.is_empty())
+            {
                 Some(c) => format!("FALSE — {c}"),
                 None => "FALSE".to_string(),
             },
@@ -101,7 +105,11 @@ pub fn parse_sentence_range(instructions: &str) -> Option<(usize, usize)> {
                 if k > m {
                     let hi: usize = chars[m..k].iter().collect::<String>().parse().ok()?;
                     let tail: String = chars[k..].iter().collect::<String>();
-                    if tail.trim_start().to_ascii_lowercase().starts_with("sentence") {
+                    if tail
+                        .trim_start()
+                        .to_ascii_lowercase()
+                        .starts_with("sentence")
+                    {
                         return Some((lo, hi));
                     }
                 }
@@ -199,34 +207,50 @@ pub trait Answerable {
     async fn answer(&self, context: &LlmContext) -> Result<Self::Output, Self::Error>;
 }
 
-async fn llm(
-    context: &LlmContext,
-    prompt: &str,
-    system: &str,
-) -> Result<String, LlmError> {
+#[tracing::instrument(skip(context, prompt, system), fields(model = %context.model, prompt_chars = prompt.len(), system_chars = system.len()))]
+async fn llm(context: &LlmContext, prompt: &str, system: &str) -> Result<String, LlmError> {
     let mut attempt: u32 = 0;
     loop {
         context.throttle.wait().await;
-        context.calls.fetch_add(1, Ordering::Relaxed);
+        let call_no = context.calls.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::debug!(call_no, attempt = attempt + 1, "issuing LLM request");
 
         let mut gen_model: GenerativeModel = context.client.generative_model(&context.model);
         if !system.is_empty() {
             gen_model = gen_model.with_system_instruction(system);
         }
 
+        let started = std::time::Instant::now();
         match gen_model.generate_content(prompt).await {
-            Ok(response) => return Ok(response.text().to_string()),
+            Ok(response) => {
+                let text = response.text().to_string();
+                tracing::debug!(
+                    call_no,
+                    elapsed_secs = started.elapsed().as_secs_f64(),
+                    response_chars = text.len(),
+                    "LLM request succeeded"
+                );
+                return Ok(text);
+            }
             Err(err) => {
                 attempt += 1;
                 let err = LlmError::from(err);
                 if !err.is_rate_limited() || attempt > context.max_retries {
+                    tracing::error!(
+                        call_no,
+                        attempt,
+                        error = %err.friendly(),
+                        "LLM request failed"
+                    );
                     return Err(err);
                 }
                 let delay = err.retry_after().unwrap_or_else(|| backoff_delay(attempt));
                 tracing::warn!(
-                    "rate limited (attempt {attempt}/{}), retrying in {:.0}s...",
-                    context.max_retries,
-                    delay.as_secs_f64(),
+                    call_no,
+                    attempt,
+                    max_retries = context.max_retries,
+                    retry_in_secs = delay.as_secs_f64(),
+                    "rate limited, backing off"
                 );
                 sleep(delay).await;
             }
@@ -259,10 +283,16 @@ fn answer_for(question: &QuizQuestion, raw: &str) -> Answer {
 }
 
 impl QuizQuestion {
+    #[tracing::instrument(skip(self, context, system), fields(system_chars = system.len()))]
     async fn answer_with(&self, context: &LlmContext, system: &str) -> Result<Answer, LlmError> {
         let prompt = prompt_for(self);
+        tracing::debug!(prompt_chars = prompt.len(), "answering single question");
         let response = llm(context, &prompt, system).await?;
-        Ok(answer_for(self, &response))
+        let answer = answer_for(self, &response);
+        if !answer.is_complete() {
+            tracing::warn!("single-question answer incomplete");
+        }
+        Ok(answer)
     }
 }
 
@@ -293,7 +323,10 @@ lines belong to the answer they follow.\n",
                     .enumerate()
                     .map(|(oi, o)| format!("{}) {}", option_label(oi), o.trim()))
                     .collect();
-                format!("[multiple choice] {question} Options: {}", labeled.join("; "))
+                format!(
+                    "[multiple choice] {question} Options: {}",
+                    labeled.join("; ")
+                )
             }
             QuizQuestion::TrueFalse { question } => {
                 format!("[true/false] {question} (reply TRUE or FALSE)")
@@ -369,27 +402,45 @@ impl Answerable for QuizSection {
     type Error = LlmError;
     type Output = Vec<Answer>;
 
+    #[tracing::instrument(skip(self, context), fields(questions = self.questions.len()))]
     async fn answer(&self, context: &LlmContext) -> Result<Self::Output, Self::Error> {
         let system = system_for_section(self.instructions.as_deref());
         let prompt = prompt_for_section(self);
+        tracing::debug!(
+            prompt_chars = prompt.len(),
+            system_chars = system.len(),
+            "answering section in one batch request"
+        );
         match llm(context, &prompt, &system).await {
             Ok(raw) => {
                 if let Some(answers) = parse_section_answers(self, &raw) {
-                    tracing::info!(
-                        "section answered in one request ({} question(s))",
-                        answers.len()
-                    );
+                    tracing::info!(questions = answers.len(), "section answered in one request");
                     return Ok(answers);
                 }
-                tracing::warn!("section batch failed validation; falling back to per-question");
+                tracing::warn!(
+                    response_chars = raw.len(),
+                    "section batch failed validation; falling back to per-question"
+                );
             }
-            Err(err) => return Err(err),
+            Err(err) => {
+                tracing::error!(error = %err.friendly(), "section batch request failed");
+                return Err(err);
+            }
         }
+        tracing::info!(
+            questions = self.questions.len(),
+            "answering section question-by-question"
+        );
         let mut answers = Vec::with_capacity(self.questions.len());
         for (i, question) in self.questions.iter().enumerate() {
-            tracing::debug!("answering question {}...", i + 1);
+            tracing::debug!(
+                question = i + 1,
+                total = self.questions.len(),
+                "answering question"
+            );
             answers.push(question.answer_with(context, &system).await?);
         }
+        tracing::info!(questions = answers.len(), "section answered per-question");
         Ok(answers)
     }
 }
@@ -398,13 +449,31 @@ impl Answerable for Quiz {
     type Error = LlmError;
     type Output = Vec<Vec<Answer>>;
 
+    #[tracing::instrument(skip(self, context), fields(sections = self.0.len()))]
     async fn answer(&self, context: &LlmContext) -> Result<Self::Output, Self::Error> {
+        let total: usize = self.0.iter().map(|s| s.questions.len()).sum();
+        tracing::info!(sections = self.0.len(), questions = total, "answering quiz");
         let mut all = Vec::with_capacity(self.0.len());
         for (i, section) in self.0.iter().enumerate() {
+            let section_no = i + 1;
+            tracing::debug!(
+                section = section_no,
+                questions = section.questions.len(),
+                "answering section"
+            );
             let answers = section.answer(context).await?;
-            tracing::info!("section {} finished...", i + 1);
+            tracing::info!(
+                section = section_no,
+                questions = answers.len(),
+                "section finished"
+            );
             all.push(answers);
         }
+        tracing::info!(
+            sections = all.len(),
+            llm_calls = context.calls(),
+            "quiz answered"
+        );
         Ok(all)
     }
 }
@@ -567,6 +636,8 @@ mod tests {
         // Modified FALSE without a correction is incomplete.
         assert!(parse_section_answers(&sample_section(), "1) b\n2) FALSE\n3) x").is_none());
         // Leading prose with no marker.
-        assert!(parse_section_answers(&sample_section(), "Here you go\n1) b\n2) TRUE\n3) x").is_none());
+        assert!(
+            parse_section_answers(&sample_section(), "Here you go\n1) b\n2) TRUE\n3) x").is_none()
+        );
     }
 }

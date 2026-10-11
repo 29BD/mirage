@@ -16,6 +16,14 @@ use crate::generation::quiz::{Quiz, QuizQuestion};
 pub fn render_quiz(quiz: &Quiz, answers: Option<&[Vec<Answer>]>) -> String {
     let mut out = String::new();
 
+    let total: usize = quiz.0.iter().map(|s| s.questions.len()).sum();
+    tracing::debug!(
+        sections = quiz.0.len(),
+        questions = total,
+        with_answers = answers.is_some(),
+        "rendering quiz"
+    );
+
     for (si, section) in quiz.0.iter().enumerate() {
         if si > 0 {
             out.push_str("\n---\n\n");
@@ -136,7 +144,10 @@ mod tests {
         assert!(rendered.contains("a) 3"));
         assert!(rendered.contains("b) 4"));
         assert!(rendered.contains("2) The sky is blue. _(True / False)_"));
-        assert!(rendered.contains("3) The sky is **green**. _(True / False; correct the **bold** part)_"));
+        assert!(
+            rendered
+                .contains("3) The sky is **green**. _(True / False; correct the **bold** part)_")
+        );
         assert!(rendered.contains("1) Explain gravity."));
         assert!(!rendered.contains('>'));
     }

@@ -1,13 +1,17 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use mirage::generation::quiz::solutions::{Answerable, LlmContext};
-use mirage::generation::quiz::Quiz;
-use mirage::output;
 use google_ai_rs::Client;
+use mirage::generation::quiz::Quiz;
+use mirage::generation::quiz::solutions::{Answerable, LlmContext};
+use mirage::output;
 
 /// Transcribe a quiz image into pretty markdown, with answers.
 #[derive(Debug, Parser)]
-#[command(name = "mirage", version, about = "Transcribe quiz images to markdown + answers")]
+#[command(
+    name = "mirage",
+    version,
+    about = "Transcribe quiz images to markdown + answers"
+)]
 struct Args {
     /// Path to the quiz image (png, jpg/jpeg, webp, heic/heif), or a public
     /// http(s):// image URL.
@@ -40,38 +44,67 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    tracing::debug!(
+        image = %args.image,
+        model = %args.model,
+        no_answers = args.no_answers,
+        rpm = args.rpm,
+        max_retries = args.max_retries,
+        "starting mirage"
+    );
 
     let api_key = std::env::var("GEMINI_API_KEY")
         .context("GEMINI_API_KEY must be set (export GEMINI_API_KEY=...)")?;
     if api_key.trim().is_empty() {
+        tracing::error!("GEMINI_API_KEY is empty");
         anyhow::bail!("GEMINI_API_KEY is empty");
     }
-    let client = Client::new(api_key).await.context("failed to create client")?;
+    let client = Client::new(api_key)
+        .await
+        .context("failed to create client")?;
+    tracing::debug!("gemini client created");
 
-    tracing::info!("transcribing {}...", args.image);
+    let started = std::time::Instant::now();
+    tracing::info!(image = %args.image, model = %args.model, "transcribing quiz");
     let quiz = Quiz::from_image_or_url(&client, &args.model, &args.image).await?;
     let total: usize = quiz.0.iter().map(|s| s.questions.len()).sum();
     tracing::info!(
-        "transcribed {} section(s), {} question(s)",
-        quiz.0.len(),
-        total
+        sections = quiz.0.len(),
+        questions = total,
+        elapsed_secs = started.elapsed().as_secs_f64(),
+        "transcription complete"
     );
 
     if args.no_answers {
+        tracing::info!("skipping answers (--no-answers)");
         print!("{}", output::render_quiz(&quiz, None));
         return Ok(());
     }
 
     let rpm = args.rpm.clamp(1, 60);
-    tracing::info!("answering {total} question(s) at ~{rpm} req/min...");
+    tracing::info!(
+        questions = total,
+        rpm,
+        max_retries = args.max_retries,
+        "answering quiz"
+    );
     let context = LlmContext::new(client, args.model, rpm, args.max_retries);
     match quiz.answer(&context).await {
         Ok(answers) => {
-            tracing::info!("solved with {} LLM call(s)", context.calls());
+            tracing::info!(
+                llm_calls = context.calls(),
+                elapsed_secs = started.elapsed().as_secs_f64(),
+                "quiz solved"
+            );
             print!("{}", output::render_quiz(&quiz, Some(&answers)));
             Ok(())
         }
         Err(err) => {
+            tracing::error!(
+                error = %err.friendly(),
+                llm_calls = context.calls(),
+                "answering failed; printing transcript without answers"
+            );
             // Don't lose the transcription after minutes of paced requests:
             // print it answer-free before failing with a one-line message
             // (the raw error embeds a huge proto details blob).

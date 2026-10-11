@@ -1,5 +1,5 @@
-use thiserror::Error;
 use std::time::Duration;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum LlmError {
@@ -42,7 +42,10 @@ impl LlmError {
         } else {
             // Still avoid the details blob: first line of the Display only.
             let full = self.haystack_line();
-            full.lines().next().unwrap_or("generation request failed").to_string()
+            full.lines()
+                .next()
+                .unwrap_or("generation request failed")
+                .to_string()
         }
     }
 

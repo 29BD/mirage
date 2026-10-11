@@ -9,12 +9,12 @@ pub use google_ai_rs::Error as GeminiError;
 pub use google_ai_rs::Part;
 
 // Common entry points for library users.
+pub use generation::errors::LlmError;
 pub use generation::image::{
-    image_url_part_with_mime, is_image_url, load_image_part, load_image_url_part, ImageError,
+    ImageError, image_url_part_with_mime, is_image_url, load_image_part, load_image_url_part,
 };
-pub use generation::quiz::{Quiz, QuizQuestion, QuizSection};
+pub use generation::queue::Throttle;
 pub use generation::quiz::errors::{QuizError, QuizFromImageError, QuizValidationError};
 pub use generation::quiz::solutions::{Answer, Answerable, LlmContext};
-pub use generation::errors::LlmError;
-pub use generation::queue::Throttle;
+pub use generation::quiz::{Quiz, QuizQuestion, QuizSection};
 pub use output::render_quiz;

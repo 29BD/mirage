@@ -1,6 +1,6 @@
-pub mod solutions;
 pub mod errors;
 mod prompts;
+pub mod solutions;
 
 use crate::generation::image::{is_image_url, load_image_part, load_image_url_part};
 use errors::{QuizError, QuizFromImageError, QuizValidationError};
@@ -29,14 +29,22 @@ pub enum QuizQuestion {
         #[schema(description = "The given question, without its printed number")]
         question: String,
     },
-    #[schema(description = "A true/false question where one span is emphasized (bold/underlined) and the instructions ask to correct that span when the statement is false; keep the span wrapped in **...**")]
+    #[schema(
+        description = "A true/false question where one span is emphasized (bold/underlined) and the instructions ask to correct that span when the statement is false; keep the span wrapped in **...**"
+    )]
     ModifiedTrueFalse {
-        #[schema(description = "The statement, without its printed number, with the emphasized span wrapped in **...**")]
+        #[schema(
+            description = "The statement, without its printed number, with the emphasized span wrapped in **...**"
+        )]
         question: String,
     },
-    #[schema(description = "Any other kind of question, e.g. fill in the blank, problem solving, essay")]
+    #[schema(
+        description = "Any other kind of question, e.g. fill in the blank, problem solving, essay"
+    )]
     OtherQuestion {
-        #[schema(description = "The given question, without its printed number; wrap emphasized spans in **...**")]
+        #[schema(
+            description = "The given question, without its printed number; wrap emphasized spans in **...**"
+        )]
         question: String,
     },
 }
@@ -70,19 +78,47 @@ struct QuizResponse {
 
 #[allow(dead_code)]
 impl QuizResponse {
-    pub async fn from_image(client: &Client, model_name: &str, image_path: impl AsRef<Path>) -> Result<Self, QuizError> {
+    #[tracing::instrument(skip(client, image_path), fields(model = %model_name))]
+    pub async fn from_image(
+        client: &Client,
+        model_name: &str,
+        image_path: impl AsRef<Path>,
+    ) -> Result<Self, QuizError> {
+        tracing::debug!(image = %image_path.as_ref().display(), "transcription request started");
         let image = load_image_part(image_path.as_ref())?;
 
         let model = client.typed_model::<QuizResponse>(model_name);
-        let response = model.generate_content((prompts::QUIZ_IMAGE_TO_ENCODED, image)).await?;
+        let started = std::time::Instant::now();
+        let response = model
+            .generate_content((prompts::QUIZ_IMAGE_TO_ENCODED, image))
+            .await?;
+        tracing::debug!(
+            elapsed_secs = started.elapsed().as_secs_f64(),
+            sections = response.sections.len(),
+            "transcription request succeeded"
+        );
         Ok(response)
     }
 
-    pub async fn from_image_url(client: &Client, model_name: &str, image_url: &str) -> Result<Self, QuizError> {
+    #[tracing::instrument(skip(client), fields(model = %model_name, image_url = %image_url))]
+    pub async fn from_image_url(
+        client: &Client,
+        model_name: &str,
+        image_url: &str,
+    ) -> Result<Self, QuizError> {
+        tracing::debug!("transcription request started");
         let image = load_image_url_part(image_url)?;
 
         let model = client.typed_model::<QuizResponse>(model_name);
-        let response = model.generate_content((prompts::QUIZ_IMAGE_TO_ENCODED, image)).await?;
+        let started = std::time::Instant::now();
+        let response = model
+            .generate_content((prompts::QUIZ_IMAGE_TO_ENCODED, image))
+            .await?;
+        tracing::debug!(
+            elapsed_secs = started.elapsed().as_secs_f64(),
+            sections = response.sections.len(),
+            "transcription request succeeded"
+        );
         Ok(response)
     }
 
@@ -106,30 +142,50 @@ const TRANSCRIBE_ATTEMPTS: u32 = 3;
 
 #[allow(dead_code)]
 impl Quiz {
+    #[tracing::instrument(skip(client, image_path), fields(model = %model_name))]
     pub async fn from_image(
         client: &Client,
         model_name: &str,
         image_path: impl AsRef<Path>,
     ) -> Result<Self, QuizFromImageError> {
+        tracing::debug!(image = %image_path.as_ref().display(), "transcribing image");
         let mut last_error = None;
         for attempt in 1..=TRANSCRIBE_ATTEMPTS {
+            tracing::debug!(
+                attempt,
+                attempts = TRANSCRIBE_ATTEMPTS,
+                "transcribing image"
+            );
             let quiz_response =
                 QuizResponse::from_image(client, model_name, image_path.as_ref()).await?;
             match Self::try_from(quiz_response) {
-                Ok(quiz) => return Ok(quiz),
+                Ok(quiz) => {
+                    let total: usize = quiz.0.iter().map(|s| s.questions.len()).sum();
+                    tracing::info!(
+                        attempt,
+                        sections = quiz.0.len(),
+                        questions = total,
+                        "transcription passed validation"
+                    );
+                    return Ok(quiz);
+                }
                 Err(err) => {
                     tracing::warn!(
-                        "transcription failed validation (attempt {attempt}/{TRANSCRIBE_ATTEMPTS}): {err}"
+                        attempt,
+                        attempts = TRANSCRIBE_ATTEMPTS,
+                        error = %err,
+                        "transcription failed validation"
                     );
                     last_error = Some(err);
                 }
             }
         }
-        Err(last_error
-            .expect("attempts non-empty")
-            .into())
+        let err = last_error.expect("attempts non-empty");
+        tracing::error!(error = %err, "transcription failed after all attempts");
+        Err(err.into())
     }
 
+    #[tracing::instrument(skip(client), fields(model = %model_name, image_url = %image_url))]
     pub async fn from_image_url(
         client: &Client,
         model_name: &str,
@@ -137,21 +193,37 @@ impl Quiz {
     ) -> Result<Self, QuizFromImageError> {
         let mut last_error = None;
         for attempt in 1..=TRANSCRIBE_ATTEMPTS {
-            let quiz_response =
-                QuizResponse::from_image_url(client, model_name, image_url).await?;
+            tracing::debug!(
+                attempt,
+                attempts = TRANSCRIBE_ATTEMPTS,
+                "transcribing image URL"
+            );
+            let quiz_response = QuizResponse::from_image_url(client, model_name, image_url).await?;
             match Self::try_from(quiz_response) {
-                Ok(quiz) => return Ok(quiz),
+                Ok(quiz) => {
+                    let total: usize = quiz.0.iter().map(|s| s.questions.len()).sum();
+                    tracing::info!(
+                        attempt,
+                        sections = quiz.0.len(),
+                        questions = total,
+                        "transcription passed validation"
+                    );
+                    return Ok(quiz);
+                }
                 Err(err) => {
                     tracing::warn!(
-                        "transcription failed validation (attempt {attempt}/{TRANSCRIBE_ATTEMPTS}): {err}"
+                        attempt,
+                        attempts = TRANSCRIBE_ATTEMPTS,
+                        error = %err,
+                        "transcription failed validation"
                     );
                     last_error = Some(err);
                 }
             }
         }
-        Err(last_error
-            .expect("attempts non-empty")
-            .into())
+        let err = last_error.expect("attempts non-empty");
+        tracing::error!(error = %err, "transcription failed after all attempts");
+        Err(err.into())
     }
 
     /// Accepts either a local path or an `http(s)://` image URL.
@@ -400,10 +472,7 @@ mod tests {
     #[test]
     fn validation_rejects_empty_quiz() {
         let err = Quiz::try_from(QuizResponse { sections: vec![] }).unwrap_err();
-        assert!(matches!(
-            err,
-            QuizValidationError::NoSections
-        ));
+        assert!(matches!(err, QuizValidationError::NoSections));
     }
 
     #[test]
@@ -479,9 +548,10 @@ mod tests {
             ),
             "expected UnsupportedImage error, got {err:?}"
         );
-        let err = Quiz::from_image_or_url(&client, DEFAULT_TEST_MODEL, "https://example.com/quiz.txt")
-            .await
-            .unwrap_err();
+        let err =
+            Quiz::from_image_or_url(&client, DEFAULT_TEST_MODEL, "https://example.com/quiz.txt")
+                .await
+                .unwrap_err();
         assert!(
             matches!(
                 err,
@@ -550,11 +620,7 @@ mod tests {
         // questions) plus an answer key the model may fold in as extra
         // sections/questions, so assert lower bounds, not exact counts.
         let total: usize = quiz.0.iter().map(|s| s.questions.len()).sum();
-        assert!(
-            quiz.0.len() >= 5,
-            "expected >= 5 sections, got {:#?}",
-            quiz
-        );
+        assert!(quiz.0.len() >= 5, "expected >= 5 sections, got {:#?}", quiz);
         assert!(
             total >= 18,
             "expected >= 18 questions, got {total}: {quiz:#?}"

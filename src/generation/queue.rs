@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 
 /// Paces outgoing LLM calls so a burst of per-question requests doesn't blow
 /// through the free-tier quota (gemini-3.1-flash-lite: 15 req/min).
@@ -37,11 +37,18 @@ impl Throttle {
             let now = Instant::now();
             if due > now {
                 let wait = due - now;
-                tracing::debug!("throttling: waiting {:.1}s for next request slot", wait.as_secs_f64());
+                tracing::debug!(
+                    wait_secs = wait.as_secs_f64(),
+                    interval_secs = self.interval.as_secs_f64(),
+                    "throttling: waiting for next request slot"
+                );
                 sleep(wait).await;
                 *self.last.lock().await = Some(due);
                 return;
             }
+            tracing::trace!("throttle slot already due, proceeding without sleep");
+        } else {
+            tracing::trace!("first throttle slot claimed immediately");
         }
         *self.last.lock().await = Some(Instant::now());
     }
