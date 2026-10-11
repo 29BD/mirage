@@ -79,11 +79,34 @@ impl QuizResponse {
     }
 }
 
+/// Transcription attempts: sampling is stochastic, so a reply that fails
+/// validation is worth re-requesting before giving up.
+const TRANSCRIBE_ATTEMPTS: u32 = 3;
+
 #[allow(dead_code)]
 impl Quiz {
-    pub async fn from_image(client: &Client, model_name: &str, image_path: impl AsRef<Path>) -> Result<Self, QuizFromImageError> {
-        let quiz_response = QuizResponse::from_image(client, model_name, image_path).await?;
-        Ok(Self::try_from(quiz_response)?)
+    pub async fn from_image(
+        client: &Client,
+        model_name: &str,
+        image_path: impl AsRef<Path>,
+    ) -> Result<Self, QuizFromImageError> {
+        let mut last_error = None;
+        for attempt in 1..=TRANSCRIBE_ATTEMPTS {
+            let quiz_response =
+                QuizResponse::from_image(client, model_name, image_path.as_ref()).await?;
+            match Self::try_from(quiz_response) {
+                Ok(quiz) => return Ok(quiz),
+                Err(err) => {
+                    tracing::warn!(
+                        "transcription failed validation (attempt {attempt}/{TRANSCRIBE_ATTEMPTS}): {err}"
+                    );
+                    last_error = Some(err);
+                }
+            }
+        }
+        Err(last_error
+            .expect("attempts non-empty")
+            .into())
     }
 }
 
