@@ -1,10 +1,8 @@
-mod generation;
-mod output;
-
 use anyhow::{Context, Result};
 use clap::Parser;
-use generation::quiz::solutions::{Answerable, LlmContext};
-use generation::quiz::Quiz;
+use mirage::generation::quiz::solutions::{Answerable, LlmContext};
+use mirage::generation::quiz::Quiz;
+use mirage::output;
 use google_ai_rs::Client;
 use std::path::PathBuf;
 
@@ -69,6 +67,7 @@ async fn main() -> Result<()> {
     let context = LlmContext::new(client, args.model, rpm, args.max_retries);
     match quiz.answer(&context).await {
         Ok(answers) => {
+            tracing::info!("solved with {} LLM call(s)", context.calls());
             print!("{}", output::render_quiz(&quiz, Some(&answers)));
             Ok(())
         }

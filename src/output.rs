@@ -47,6 +47,13 @@ pub fn render_quiz(quiz: &Quiz, answers: Option<&[Vec<Answer>]>) -> String {
                         question.trim()
                     ));
                 }
+                QuizQuestion::ModifiedTrueFalse { question } => {
+                    out.push_str(&format!(
+                        "  {}) {} _(True / False; correct the **bold** part)_\n",
+                        qi + 1,
+                        question.trim()
+                    ));
+                }
                 QuizQuestion::OtherQuestion { question } => {
                     out.push_str(&format!("  {}) {}\n", qi + 1, question.trim()));
                 }
@@ -56,7 +63,7 @@ pub fn render_quiz(quiz: &Quiz, answers: Option<&[Vec<Answer>]>) -> String {
                 .and_then(|all| all.get(si))
                 .and_then(|sec| sec.get(qi))
             {
-                let text = answer.text().trim();
+                let text = answer.text();
                 if text.is_empty() {
                     out.push_str("     > (no answer)\n");
                 } else {
@@ -73,7 +80,7 @@ pub fn render_quiz(quiz: &Quiz, answers: Option<&[Vec<Answer>]>) -> String {
     out
 }
 
-fn option_label(index: usize) -> String {
+pub(crate) fn option_label(index: usize) -> String {
     // a, b, ... z, aa, ab, ... for very long option lists.
     let mut n = index;
     let mut label = String::new();
@@ -105,6 +112,9 @@ mod tests {
                     QuizQuestion::TrueFalse {
                         question: "The sky is blue.".to_string(),
                     },
+                    QuizQuestion::ModifiedTrueFalse {
+                        question: "The sky is **green**.".to_string(),
+                    },
                 ],
             },
             QuizSection {
@@ -126,6 +136,7 @@ mod tests {
         assert!(rendered.contains("a) 3"));
         assert!(rendered.contains("b) 4"));
         assert!(rendered.contains("2) The sky is blue. _(True / False)_"));
+        assert!(rendered.contains("3) The sky is **green**. _(True / False; correct the **bold** part)_"));
         assert!(rendered.contains("1) Explain gravity."));
         assert!(!rendered.contains('>'));
     }
@@ -134,12 +145,20 @@ mod tests {
     fn renders_answers_as_blockquotes() {
         let quiz = sample_quiz();
         let answers = vec![
-            vec![Answer("4".to_string()), Answer("True".to_string())],
-            vec![Answer("Mass attracts mass.".to_string())],
+            vec![
+                Answer::Simple("4".to_string()),
+                Answer::Simple("True".to_string()),
+                Answer::ModifiedTrueFalse {
+                    verdict: false,
+                    correction: Some("blue".to_string()),
+                },
+            ],
+            vec![Answer::Simple("Mass attracts mass.".to_string())],
         ];
         let rendered = render_quiz(&quiz, Some(&answers));
         assert!(rendered.contains("> 4"));
         assert!(rendered.contains("> True"));
+        assert!(rendered.contains("> FALSE — blue"));
         assert!(rendered.contains("> Mass attracts mass."));
     }
 }
