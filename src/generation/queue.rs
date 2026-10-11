@@ -29,6 +29,13 @@ impl Throttle {
 
     /// Sleep until the next slot is due, then claim it.
     pub async fn wait(&self) {
+        let _ = self.wait_and_report().await;
+    }
+
+    /// Same as [`Self::wait`], but returns the time actually slept: `Some`
+    /// when this call paced the request, `None` when the slot was already
+    /// due (or on first use, which claims a slot immediately).
+    pub async fn wait_and_report(&self) -> Option<Duration> {
         let due = {
             let guard = self.last.lock().await;
             guard.map(|last| last + self.interval)
@@ -44,13 +51,14 @@ impl Throttle {
                 );
                 sleep(wait).await;
                 *self.last.lock().await = Some(due);
-                return;
+                return Some(wait);
             }
             tracing::trace!("throttle slot already due, proceeding without sleep");
         } else {
             tracing::trace!("first throttle slot claimed immediately");
         }
         *self.last.lock().await = Some(Instant::now());
+        None
     }
 }
 
@@ -87,5 +95,14 @@ mod tests {
         let start = Instant::now();
         t.wait().await;
         assert!(start.elapsed() >= Duration::from_millis(900));
+    }
+
+    #[tokio::test]
+    async fn wait_and_report_distinguishes_sleep_from_immediate() {
+        let t = Throttle::from_rpm(60); // 1s interval keeps the test fast
+        assert_eq!(t.wait_and_report().await, None);
+        let waited = t.wait_and_report().await.expect("second slot should sleep");
+        assert!(waited >= Duration::from_millis(900));
+        assert!(waited <= Duration::from_secs(2));
     }
 }
