@@ -15,6 +15,7 @@ pub use generation::image::{
 };
 pub use generation::queue::Throttle;
 pub use generation::quiz::errors::{QuizError, QuizFromImageError, QuizValidationError};
+pub use generation::quiz::progress::{MpscSink, NullSink, ProgressSink, QuizProgress, WaitReason};
 pub use generation::quiz::solutions::{Answer, Answerable, LlmContext};
 pub use generation::quiz::{Quiz, QuizQuestion, QuizSection};
 pub use output::render_quiz;
