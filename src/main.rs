@@ -69,6 +69,7 @@ async fn main() -> Result<()> {
     let context = LlmContext::new(client, args.model, rpm, args.max_retries);
     match quiz.answer(&context).await {
         Ok(answers) => {
+            tracing::info!("solved with {} LLM call(s)", context.calls());
             print!("{}", output::render_quiz(&quiz, Some(&answers)));
             Ok(())
         }

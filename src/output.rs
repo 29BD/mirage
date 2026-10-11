@@ -80,7 +80,7 @@ pub fn render_quiz(quiz: &Quiz, answers: Option<&[Vec<Answer>]>) -> String {
     out
 }
 
-fn option_label(index: usize) -> String {
+pub(crate) fn option_label(index: usize) -> String {
     // a, b, ... z, aa, ab, ... for very long option lists.
     let mut n = index;
     let mut label = String::new();

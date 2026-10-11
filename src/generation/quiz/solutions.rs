@@ -2,8 +2,13 @@ use super::{Quiz, QuizQuestion, QuizSection};
 use super::super::errors::{backoff_delay, LlmError};
 use super::super::queue::Throttle;
 use super::prompts::ANSWER_QUESTION;
+use crate::output::option_label;
 use google_ai_rs::{Client, GenerativeModel};
 use std::fmt;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use tokio::time::sleep;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +172,7 @@ pub struct LlmContext {
     pub model: String,
     pub throttle: Throttle,
     pub max_retries: u32,
+    calls: Arc<AtomicU64>,
 }
 
 impl LlmContext {
@@ -176,7 +182,13 @@ impl LlmContext {
             model,
             throttle: Throttle::from_rpm(rpm),
             max_retries,
+            calls: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Number of LLM requests issued through this context (incl. retries).
+    pub fn calls(&self) -> u64 {
+        self.calls.load(Ordering::Relaxed)
     }
 }
 
@@ -195,6 +207,7 @@ async fn llm(
     let mut attempt: u32 = 0;
     loop {
         context.throttle.wait().await;
+        context.calls.fetch_add(1, Ordering::Relaxed);
 
         let mut gen_model: GenerativeModel = context.client.generative_model(&context.model);
         if !system.is_empty() {
@@ -262,12 +275,117 @@ impl Answerable for QuizQuestion {
     }
 }
 
+/// One prompt for a whole section: numbered questions with type tags.
+/// Option letters are generated here at solve time; they are not stored.
+fn prompt_for_section(section: &QuizSection) -> String {
+    let mut out = format!(
+        "Answer these {} questions in order. Reply with exactly {} answers: \
+each answer starts on its own line as `1) ...`, `2) ...`, and any extra \
+lines belong to the answer they follow.\n",
+        section.questions.len(),
+        section.questions.len(),
+    );
+    for (i, question) in section.questions.iter().enumerate() {
+        let rendered = match question {
+            QuizQuestion::MultipleChoice { question, options } => {
+                let labeled: Vec<String> = options
+                    .iter()
+                    .enumerate()
+                    .map(|(oi, o)| format!("{}) {}", option_label(oi), o.trim()))
+                    .collect();
+                format!("[multiple choice] {question} Options: {}", labeled.join("; "))
+            }
+            QuizQuestion::TrueFalse { question } => {
+                format!("[true/false] {question} (reply TRUE or FALSE)")
+            }
+            QuizQuestion::ModifiedTrueFalse { question } => {
+                format!(
+                    "[modified true/false] {question} (reply TRUE, or FALSE — <replacement for the **bold** span>; correction required when FALSE)"
+                )
+            }
+            QuizQuestion::OtherQuestion { question } => {
+                format!("[free response] {question}")
+            }
+        };
+        out.push_str(&format!("\n{}. {}", i + 1, rendered.trim()));
+    }
+    out
+}
+
+/// Split a section reply into one block per question. A line starting with
+/// `N)` or `N.` opens block N; other non-empty lines continue the current
+/// block (shown work, essay sentences). Returns `None` when the reply does
+/// not hold exactly one complete answer per question.
+fn parse_section_answers(section: &QuizSection, raw: &str) -> Option<Vec<Answer>> {
+    let mut blocks: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if strip_leading_marker(t).is_some() {
+            blocks.push(t.to_string());
+        } else if let Some(last) = blocks.last_mut() {
+            last.push('\n');
+            last.push_str(t);
+        } else {
+            return None;
+        }
+    }
+    if blocks.len() != section.questions.len() {
+        return None;
+    }
+    let answers: Vec<Answer> = section
+        .questions
+        .iter()
+        .zip(blocks.iter())
+        .map(|(question, block)| {
+            let body = strip_leading_marker(block).unwrap_or(block);
+            answer_for(question, body)
+        })
+        .collect();
+    if answers.iter().all(Answer::is_complete) {
+        Some(answers)
+    } else {
+        None
+    }
+}
+
+/// Strip a leading `N)` / `N.` answer marker, returning the body.
+fn strip_leading_marker(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    let digits = t.len() - t.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if digits == 0 {
+        return None;
+    }
+    let rest = t.get(digits..)?;
+    let mut chars = rest.chars();
+    match chars.next() {
+        Some('.') | Some(')') => Some(chars.as_str().trim_start()),
+        _ => None,
+    }
+}
+
 impl Answerable for QuizSection {
     type Error = LlmError;
     type Output = Vec<Answer>;
 
     async fn answer(&self, context: &LlmContext) -> Result<Self::Output, Self::Error> {
         let system = system_for_section(self.instructions.as_deref());
+        let prompt = prompt_for_section(self);
+        match llm(context, &prompt, &system).await {
+            Ok(raw) => {
+                if let Some(answers) = parse_section_answers(self, &raw) {
+                    tracing::info!(
+                        "section answered in one request ({} question(s))",
+                        answers.len()
+                    );
+                    return Ok(answers);
+                }
+                tracing::warn!("section batch failed validation; falling back to per-question");
+            }
+            Err(err) => return Err(err),
+        }
         let mut answers = Vec::with_capacity(self.questions.len());
         for (i, question) in self.questions.iter().enumerate() {
             tracing::debug!("answering question {}...", i + 1);
@@ -395,5 +513,61 @@ mod tests {
     fn counts_sentences() {
         assert_eq!(count_sentences("One. Two! Three?"), 3);
         assert_eq!(count_sentences("  "), 0);
+    }
+
+    fn sample_section() -> QuizSection {
+        QuizSection {
+            instructions: Some("Show your work.".to_string()),
+            questions: vec![
+                QuizQuestion::MultipleChoice {
+                    question: "What is 2 + 2?".to_string(),
+                    options: vec!["3".to_string(), "4".to_string()],
+                },
+                QuizQuestion::ModifiedTrueFalse {
+                    question: "The sky is **green**.".to_string(),
+                },
+                QuizQuestion::OtherQuestion {
+                    question: "Explain.".to_string(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn section_prompt_numbers_and_labels_options() {
+        let prompt = prompt_for_section(&sample_section());
+        assert!(prompt.contains("1. [multiple choice] What is 2 + 2?"));
+        assert!(prompt.contains("a) 3; b) 4"));
+        assert!(prompt.contains("2. [modified true/false]"));
+        assert!(prompt.contains("3. [free response] Explain."));
+    }
+
+    #[test]
+    fn section_reply_parses_one_block_per_question() {
+        let raw = "1) b\n2) FALSE — blue\n3) Mass attracts mass.\n   It pulls things down.";
+        let answers = parse_section_answers(&sample_section(), raw).expect("should parse");
+        assert_eq!(answers.len(), 3);
+        assert_eq!(answers[0], Answer::Simple("b".to_string()));
+        assert_eq!(
+            answers[1],
+            Answer::ModifiedTrueFalse {
+                verdict: false,
+                correction: Some("blue".to_string()),
+            }
+        );
+        assert_eq!(
+            answers[2],
+            Answer::Simple("Mass attracts mass.\nIt pulls things down.".to_string())
+        );
+    }
+
+    #[test]
+    fn section_reply_rejects_bad_counts_and_bare_false() {
+        // Too few blocks.
+        assert!(parse_section_answers(&sample_section(), "1) b\n2) TRUE").is_none());
+        // Modified FALSE without a correction is incomplete.
+        assert!(parse_section_answers(&sample_section(), "1) b\n2) FALSE\n3) x").is_none());
+        // Leading prose with no marker.
+        assert!(parse_section_answers(&sample_section(), "Here you go\n1) b\n2) TRUE\n3) x").is_none());
     }
 }
